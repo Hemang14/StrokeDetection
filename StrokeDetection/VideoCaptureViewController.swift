@@ -4,10 +4,11 @@
 //
 //  Created by Hemang Singh on 1/22/25.
 //
+
 import UIKit
 import AVFoundation
 
-class VideoCaptureViewController: UIViewController, AVCaptureFileOutputRecordingDelegate {
+class VideoCaptureViewController: UIViewController, AVCaptureFileOutputRecordingDelegate, AVCaptureDepthDataOutputDelegate {
     var captureSession: AVCaptureSession!
     var activeInput: AVCaptureDeviceInput!
     var movieOutput: AVCaptureMovieFileOutput!
@@ -35,11 +36,9 @@ class VideoCaptureViewController: UIViewController, AVCaptureFileOutputRecording
         recordButton.addTarget(self, action: #selector(toggleRecording), for: .touchUpInside)
         recordButton.autoresizingMask = [.flexibleTopMargin, .flexibleLeftMargin, .flexibleRightMargin]
 
-        // Ensure the button is above all other views
         view.addSubview(recordButton)
         view.bringSubviewToFront(recordButton)
     }
-
 
     @objc func toggleRecording() {
         if movieOutput.isRecording {
@@ -76,13 +75,6 @@ class VideoCaptureViewController: UIViewController, AVCaptureFileOutputRecording
         depthDataOutput.setDelegate(self, callbackQueue: DispatchQueue(label: "depthDataQueue"))
     }
 
-    private func isDepthCaptureSupported() -> Bool {
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-            return false
-        }
-        return device.activeFormat.supportedDepthDataFormats.count > 0
-    }
-
     private func setupDeviceInputAndOutput() {
         guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let audioDevice = AVCaptureDevice.default(for: .audio) else {
@@ -103,7 +95,7 @@ class VideoCaptureViewController: UIViewController, AVCaptureFileOutputRecording
                 captureSession.addInput(audioInput)
             }
             
-            configureVideoInputSettings(videoDevice)
+            configureHighSpeedVideoSettings(videoDevice)
             
             movieOutput = AVCaptureMovieFileOutput()
             if captureSession.canAddOutput(movieOutput) {
@@ -114,29 +106,74 @@ class VideoCaptureViewController: UIViewController, AVCaptureFileOutputRecording
             print("Error setting device input/output: \(error)")
         }
     }
-    
-    private func configureVideoInputSettings(_ device: AVCaptureDevice) {
+
+    private func configureHighSpeedVideoSettings(_ device: AVCaptureDevice) {
         do {
             try device.lockForConfiguration()
-            
-            if device.isFocusModeSupported(.continuousAutoFocus) {
-                device.focusMode = .continuousAutoFocus
+
+            // Find and apply the highest frame rate video format.
+            let formats = device.formats.filter { $0.videoSupportedFrameRateRanges.contains { $0.maxFrameRate >= 120 } }
+            if let format = formats.first, let range = format.videoSupportedFrameRateRanges.first(where: { $0.maxFrameRate >= 120 }) {
+                device.activeFormat = format
+                device.activeVideoMinFrameDuration = range.minFrameDuration
+                device.activeVideoMaxFrameDuration = range.minFrameDuration
             }
-            
-            if device.isExposureModeSupported(.continuousAutoExposure) {
-                device.exposureMode = .continuousAutoExposure
+
+            // Configure exposure settings for fast motion capture.
+            if device.isExposureModeSupported(.custom) {
+                let exposureDuration = CMTimeMake(value: 1, timescale: 1000) // 1/1000 seconds
+                device.setExposureModeCustom(duration: exposureDuration, iso: AVCaptureDevice.currentISO, completionHandler: nil)
             }
-            
-            if device.isSmoothAutoFocusEnabled {
-                device.isSmoothAutoFocusEnabled = true
-            }
-            
+
             device.unlockForConfiguration()
         } catch {
-            print("Error configuring the device: \(error)")
+            print("Error configuring the device for high-speed video: \(error)")
         }
     }
+    
+    /* /// This can be used to capture video in high quality - 1080*1920
+     private func configureHighSpeedVideoSettings(_ device: AVCaptureDevice) {
+         do {
+             try device.lockForConfiguration()
 
+             // Identify the best format that supports 1080p at the highest frame rate
+             var bestFormat: AVCaptureDevice.Format?
+             var highestFrameRate: AVFrameRateRange?
+
+             for format in device.formats {
+                 if format.formatDescription.dimensions.width == 1920 && format.formatDescription.dimensions.height == 1080 {
+                     for range in format.videoSupportedFrameRateRanges {
+                         if highestFrameRate == nil || range.maxFrameRate > highestFrameRate!.maxFrameRate {
+                             highestFrameRate = range
+                             bestFormat = format
+                         }
+                     }
+                 }
+             }
+
+             if let bestFormat = bestFormat, let highestFrameRate = highestFrameRate {
+                 // Set the device's active format
+                 device.activeFormat = bestFormat
+                 device.activeVideoMinFrameDuration = highestFrameRate.minFrameDuration
+                 device.activeVideoMaxFrameDuration = highestFrameRate.minFrameDuration
+
+                 // Adjust exposure settings for rapid movements
+                 if device.isExposureModeSupported(.custom) {
+                     let exposureDuration = highestFrameRate.minFrameDuration
+                     device.setExposureModeCustom(duration: exposureDuration, iso: AVCaptureDevice.currentISO, completionHandler: nil)
+                 }
+
+                 device.unlockForConfiguration()
+             } else {
+                 print("No suitable format found for 1080p recording at a high frame rate.")
+             }
+         } catch {
+             print("Error configuring the device for high-speed video: \(error)")
+             device.unlockForConfiguration()
+         }
+     }
+
+     */
 
     private func setupPreview() {
         previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
@@ -179,9 +216,7 @@ class VideoCaptureViewController: UIViewController, AVCaptureFileOutputRecording
             UISaveVideoAtPathToSavedPhotosAlbum(videoRecorded.path, nil, nil, nil)
         }
     }
-}
 
-extension VideoCaptureViewController: AVCaptureDepthDataOutputDelegate {
     func depthDataOutput(_ output: AVCaptureDepthDataOutput, didOutput depthData: AVDepthData, timestamp: CMTime, connection: AVCaptureConnection) {
         // Process depth data
         let depthPixelBuffer = depthData.depthDataMap
@@ -189,7 +224,6 @@ extension VideoCaptureViewController: AVCaptureDepthDataOutputDelegate {
     }
     
     private func processDepthData(pixelBuffer: CVPixelBuffer) {
-        // We can use this later for processing the video and depth
+        // Placeholder for depth data processing
     }
 }
-
